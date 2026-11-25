@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Footprints,
   Map as MapIcon,
@@ -15,7 +15,6 @@ import {
   WEIGHT_PRESETS,
 } from './data/hyderabadWalkability';
 import { computeWalkScore } from './utils/walkability';
-import HyderabadMap from './components/HyderabadMap';
 import WeightControls from './components/WeightControls';
 import NeighborhoodExplorer from './components/NeighborhoodExplorer';
 import NeighborhoodAuditPanel from './components/NeighborhoodAuditPanel';
@@ -40,22 +39,17 @@ function readJsonStorage(key, fallback) {
 }
 
 export default function App() {
+  const [MapComponent, setMapComponent] = useState(null);
+  const hasLoadedStorageRef = useRef(false);
+
   const [activeTab, setActiveTab] = useState('explorer'); // 'explorer' | 'issues' | 'compare'
   const [mobileView, setMobileView] = useState('split'); // 'panel' | 'map' on small screens
-  const [weights, setWeights] = useState(() =>
-    readJsonStorage(STORAGE_KEYS.weights, WEIGHT_PRESETS[0].weights)
-  );
-  const [activePresetId, setActivePresetId] = useState(() =>
-    readJsonStorage(STORAGE_KEYS.preset, WEIGHT_PRESETS[0].id)
-  );
+  const [weights, setWeights] = useState(WEIGHT_PRESETS[0].weights);
+  const [activePresetId, setActivePresetId] = useState(WEIGHT_PRESETS[0].id);
   const [weightsExpanded, setWeightsExpanded] = useState(false);
 
-  const [issues, setIssues] = useState(() =>
-    readJsonStorage(STORAGE_KEYS.issues, INITIAL_ISSUES)
-  );
-  const [upvotedIds, setUpvotedIds] = useState(() =>
-    readJsonStorage(STORAGE_KEYS.upvotes, [])
-  );
+  const [issues, setIssues] = useState(INITIAL_ISSUES);
+  const [upvotedIds, setUpvotedIds] = useState([]);
 
   const [selectedNeighborhoodId, setSelectedNeighborhoodId] = useState('jubilee-kbr');
   const [auditOpen, setAuditOpen] = useState(false);
@@ -73,8 +67,29 @@ export default function App() {
   const [draftCoords, setDraftCoords] = useState(null);
   const [toast, setToast] = useState('');
 
+  // Load client-only Leaflet map & persisted localStorage after hydration
+  useEffect(() => {
+    let mounted = true;
+    import('./components/HyderabadMap').then((mod) => {
+      if (mounted) {
+        setMapComponent(() => mod.default);
+      }
+    });
+
+    setWeights(readJsonStorage(STORAGE_KEYS.weights, WEIGHT_PRESETS[0].weights));
+    setActivePresetId(readJsonStorage(STORAGE_KEYS.preset, WEIGHT_PRESETS[0].id));
+    setIssues(readJsonStorage(STORAGE_KEYS.issues, INITIAL_ISSUES));
+    setUpvotedIds(readJsonStorage(STORAGE_KEYS.upvotes, []));
+    hasLoadedStorageRef.current = true;
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Persist user state
   useEffect(() => {
+    if (!hasLoadedStorageRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.issues, JSON.stringify(issues));
     } catch {
@@ -83,6 +98,7 @@ export default function App() {
   }, [issues]);
 
   useEffect(() => {
+    if (!hasLoadedStorageRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.upvotes, JSON.stringify(upvotedIds));
     } catch {
@@ -91,6 +107,7 @@ export default function App() {
   }, [upvotedIds]);
 
   useEffect(() => {
+    if (!hasLoadedStorageRef.current) return;
     try {
       localStorage.setItem(STORAGE_KEYS.weights, JSON.stringify(weights));
       localStorage.setItem(STORAGE_KEYS.preset, JSON.stringify(activePresetId));
@@ -391,15 +408,57 @@ export default function App() {
             )}
 
             {activeTab === 'explorer' && (
-              <NeighborhoodExplorer
-                neighborhoods={NEIGHBORHOODS}
-                weights={weights}
-                issues={issues}
-                selectedNeighborhoodId={selectedNeighborhoodId}
-                onSelectNeighborhood={handleSelectNeighborhood}
-                compareIds={compareIds}
-                onToggleCompare={handleToggleCompare}
-              />
+              <>
+                <NeighborhoodExplorer
+                  neighborhoods={NEIGHBORHOODS}
+                  weights={weights}
+                  issues={issues}
+                  selectedNeighborhoodId={selectedNeighborhoodId}
+                  onSelectNeighborhood={handleSelectNeighborhood}
+                  compareIds={compareIds}
+                  onToggleCompare={handleToggleCompare}
+                />
+
+                <section
+                  aria-label="Top Active Pedestrian Hazards in Hyderabad"
+                  className="rounded-2xl border border-black/10 bg-white p-3.5 shadow-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-[#181D23]">
+                      Top Active Street Hazards
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('issues')}
+                      className="text-[11px] font-bold text-[#D96B27] hover:underline"
+                    >
+                      View all ({citySummary.openIssues}) →
+                    </button>
+                  </div>
+                  <ul className="mt-2.5 space-y-2">
+                    {issues
+                      .filter((i) => i.status !== 'Resolved')
+                      .slice(0, 3)
+                      .map((iss) => (
+                        <li key={iss.id}>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectIssue(iss.id)}
+                            className="w-full rounded-xl bg-[#FAF9F6] px-3 py-2 text-left transition hover:bg-[#EFECE5]"
+                          >
+                            <div className="text-xs font-bold text-[#181D23]">{iss.title}</div>
+                            <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#525866]">
+                              <span className="truncate">{iss.street}</span>
+                              <span className="font-mono-num ml-2 shrink-0 font-semibold text-[#D96B27]">
+                                ▲ {iss.upvotes}
+                              </span>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                </section>
+              </>
             )}
 
             {activeTab === 'issues' && (
@@ -434,23 +493,40 @@ export default function App() {
             mobileView === 'map' ? 'block' : 'hidden'
           } relative min-w-0 flex-1 lg:block`}
         >
-          <HyderabadMap
-            neighborhoods={NEIGHBORHOODS}
-            weights={weights}
-            selectedNeighborhoodId={selectedNeighborhoodId}
-            onSelectNeighborhood={handleSelectNeighborhood}
-            issues={issues}
-            selectedIssueId={selectedIssueId}
-            onSelectIssue={handleSelectIssue}
-            layers={layers}
-            onToggleLayer={(key) =>
-              setLayers((prev) => ({ ...prev, [key]: !prev[key] }))
-            }
-            isPickingLocation={isPickingLocation}
-            draftCoords={draftCoords}
-            onPickLocation={handlePickLocation}
-            onCancelPick={() => setIsPickingLocation(false)}
-          />
+          {MapComponent ? (
+            <MapComponent
+              neighborhoods={NEIGHBORHOODS}
+              weights={weights}
+              selectedNeighborhoodId={selectedNeighborhoodId}
+              onSelectNeighborhood={handleSelectNeighborhood}
+              issues={issues}
+              selectedIssueId={selectedIssueId}
+              onSelectIssue={handleSelectIssue}
+              layers={layers}
+              onToggleLayer={(key) =>
+                setLayers((prev) => ({ ...prev, [key]: !prev[key] }))
+              }
+              isPickingLocation={isPickingLocation}
+              draftCoords={draftCoords}
+              onPickLocation={handlePickLocation}
+              onCancelPick={() => setIsPickingLocation(false)}
+            />
+          ) : (
+            <div
+              role="region"
+              aria-label="Interactive Walkable Hyderabad Map"
+              className="flex h-full w-full flex-col items-center justify-center bg-[#E9E4DA] p-6 text-center"
+            >
+              <div className="max-w-md rounded-2xl border border-black/10 bg-white/90 p-5 shadow-sm">
+                <h2 className="font-display text-base font-bold text-[#181D23]">
+                  Hyderabad Walkability &amp; Pedestrian Issue Map
+                </h2>
+                <p className="mt-1.5 text-xs leading-relaxed text-[#525866]">
+                  Interactive Leaflet map covering 10 audited Hyderabad neighborhoods, Metro corridors, and community-reported street hazards.
+                </p>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Slide-Over Street Audit Panel */}
